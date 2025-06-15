@@ -1,40 +1,63 @@
 
 import streamlit as st
-from pyairtable import Table
 import pandas as pd
-import os
+import requests
+import datetime
 
 # Load Airtable credentials from Streamlit secrets
-api_key = st.secrets["airtable"]["api_key"]
-base_id = st.secrets["airtable"]["base_id"]
-table_name = st.secrets["airtable"]["table_name"]
+AIRTABLE_API_KEY = st.secrets["AIRTABLE_API_KEY"]
+BASE_ID = st.secrets["AIRTABLE_BASE_ID"]
+TABLE_NAME = st.secrets["AIRTABLE_TABLE_NAME"]
 
-# Connect to Airtable
-table = Table(api_key, base_id, table_name)
-records = table.all()
-data = pd.DataFrame([record['fields'] for record in records])
+# Fetch data from Airtable
+def fetch_airtable_records():
+    url = f"https://api.airtable.com/v0/{BASE_ID}/{TABLE_NAME}"
+    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
+    all_records = []
+    offset = None
 
-# Dashboard layout
+    while True:
+        params = {"offset": offset} if offset else {}
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code != 200:
+            st.error("Failed to fetch data from Airtable.")
+            return pd.DataFrame()
+
+        data = response.json()
+        all_records.extend(data["records"])
+        offset = data.get("offset")
+        if not offset:
+            break
+
+    # Flatten records
+    rows = []
+    for r in all_records:
+        fields = r["fields"]
+        fields["Submitted At"] = fields.get("Submitted At", r["createdTime"])
+        rows.append(fields)
+
+    return pd.DataFrame(rows)
+
+# Streamlit UI
 st.set_page_config(page_title="TrueVal Dashboard", layout="wide")
 st.title("📊 TrueVal Dashboard")
 
+df = fetch_airtable_records()
+
 # Metrics
-total_signups = len(data)
-latest_accuracy = 92.48  # Placeholder – replace with dynamic logic if needed
-st.metric("Total Signups", total_signups)
-st.metric("Latest AI Accuracy", f"{latest_accuracy}%")
+st.metric("Total Signups", len(df))
+st.metric("Latest AI Accuracy", "92.48%")  # Placeholder
 
 # Charts
-st.subheader("📈 Signups Over Time")
-if 'Submitted At' in data.columns:
-    data["Submitted At"] = pd.to_datetime(data["Submitted At"], errors='coerce')
-    st.line_chart(data.groupby(data["Submitted At"].dt.date).size())
+if not df.empty and "Submitted At" in df.columns:
+    df["Submitted At"] = pd.to_datetime(df["Submitted At"])
+    df["Date"] = df["Submitted At"].dt.date
+    signups_by_day = df.groupby("Date").size()
 
-st.subheader("🧠 AI Model Accuracy")
-# Placeholder data – in production, load real accuracy logs
-accuracy_data = pd.DataFrame({
-    "Date": pd.date_range(end=pd.Timestamp.today(), periods=7),
-    "Accuracy": [91.2, 91.5, 92.0, 91.8, 92.3, 92.1, latest_accuracy]
-})
-accuracy_data.set_index("Date", inplace=True)
-st.line_chart(accuracy_data)
+    st.subheader("📈 Signups Over Time")
+    st.line_chart(signups_by_day)
+
+    st.subheader("🧠 AI Model Accuracy (Simulated)")
+    st.line_chart([91.2, 91.5, 92.0, 92.3, 92.48])  # Replace with real data later
+else:
+    st.warning("No records yet. Try submitting the Airtable form.")
